@@ -23,7 +23,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "usbd_cdc_if.h"
-#include <stdio.h>
+#include "module_execute.h"
+#include "at_command.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -42,13 +43,9 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
-
-static uint32_t delay = 250;
 IPCC_HandleTypeDef hipcc;
 
 UART_HandleTypeDef hlpuart1;
-DMA_HandleTypeDef hdma_lpuart1_tx;
-DMA_HandleTypeDef hdma_lpuart1_rx;
 
 RNG_HandleTypeDef hrng;
 
@@ -62,7 +59,6 @@ RTC_HandleTypeDef hrtc;
 void SystemClock_Config(void);
 void PeriphCommonClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_DMA_Init(void);
 static void MX_IPCC_Init(void);
 static void MX_LPUART1_UART_Init(void);
 static void MX_RNG_Init(void);
@@ -74,7 +70,11 @@ static void MX_RF_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-
+int _write(int file, char *ptr, int len)
+{
+  CDC_Transmit_FS((uint8_t *)ptr, len);
+  return len;
+}
 /* USER CODE END 0 */
 
 /**
@@ -114,53 +114,26 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_DMA_Init();
   MX_LPUART1_UART_Init();
   MX_RNG_Init();
   MX_RTC_Init();
+  /* Init code for STM32_WPAN */
+  MX_APPE_Init();
+  HAL_Delay(100);
   MX_USB_Device_Init();
   MX_RF_Init();
   /* USER CODE BEGIN 2 */
-  printf("\r\n========================================\r\n");
   printf("STM32WB55 BLE Gateway Starting...\r\n");
-  printf("FUS: v2.2.0 | Stack: v1.24.0.3\r\n");
-  printf("========================================\r\n");
+  HAL_GPIO_TogglePin(LED_B_GPIO_Port, LED_B_Pin);
+  printf("Leds On\r\n");
+  module_ble_init();
+  printf("BLE Module Initialized\r\n");
   /* USER CODE END 2 */
-
-  /* Init code for STM32_WPAN */
-  MX_APPE_Init();
-
-  /* Initialize leds */
-  BSP_LED_Init(LED_BLUE);
-  BSP_LED_Init(LED_GREEN);
-  BSP_LED_Init(LED_RED);
-
-  /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
-  BSP_PB_Init(BUTTON_SW1, BUTTON_MODE_EXTI);
-
-  /* USER CODE BEGIN BSP */
-
-  /* -- Sample board code to switch on leds ---- */
-  BSP_LED_On(LED_BLUE);
-  BSP_LED_On(LED_GREEN);
-  BSP_LED_On(LED_RED);
-
-  /* USER CODE END BSP */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-
-    /* -- Sample board code for User push-button in interrupt mode ---- */
-    BSP_LED_Toggle(LED_BLUE);
-    HAL_Delay(delay);
-
-    BSP_LED_Toggle(LED_GREEN);
-    HAL_Delay(delay);
-
-    BSP_LED_Toggle(LED_RED);
-    HAL_Delay(delay);
     /* USER CODE END WHILE */
     MX_APPE_Process();
 
@@ -317,7 +290,7 @@ static void MX_LPUART1_UART_Init(void)
 
   /* USER CODE END LPUART1_Init 1 */
   hlpuart1.Instance = LPUART1;
-  hlpuart1.Init.BaudRate = 2000000;
+  hlpuart1.Init.BaudRate = 115200;
   hlpuart1.Init.WordLength = UART_WORDLENGTH_8B;
   hlpuart1.Init.StopBits = UART_STOPBITS_1;
   hlpuart1.Init.Parity = UART_PARITY_NONE;
@@ -344,7 +317,9 @@ static void MX_LPUART1_UART_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN LPUART1_Init 2 */
-
+  __HAL_UART_ENABLE_IT(&hlpuart1, UART_IT_RXNE);
+  HAL_NVIC_SetPriority(LPUART1_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(LPUART1_IRQn);
   /* USER CODE END LPUART1_Init 2 */
 
 }
@@ -434,26 +409,6 @@ static void MX_RTC_Init(void)
 }
 
 /**
-  * Enable DMA controller clock
-  */
-static void MX_DMA_Init(void)
-{
-
-  /* DMA controller clock enable */
-  __HAL_RCC_DMAMUX1_CLK_ENABLE();
-  __HAL_RCC_DMA1_CLK_ENABLE();
-
-  /* DMA interrupt init */
-  /* DMA1_Channel1_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
-  /* DMA1_Channel2_IRQn interrupt configuration */
-  HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 0, 0);
-  HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
-
-}
-
-/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -468,33 +423,18 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOE_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(LED_B_GPIO_Port, LED_B_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : PA4 */
-  GPIO_InitStruct.Pin = GPIO_PIN_4;
+  /*Configure GPIO pin : LED_B_Pin */
+  GPIO_InitStruct.Pin = LED_B_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pins : PB0 PB1 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : PA10 */
-  GPIO_InitStruct.Pin = GPIO_PIN_10;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(LED_B_GPIO_Port, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -504,22 +444,6 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE END 4 */
-
-/**
-  * @brief EXTI line detection callback.
-  * @param GPIO_Pin: Specifies the pins connected EXTI line
-  * @retval None
-  */
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  switch(GPIO_Pin)
-  {
-    case BUTTON_SW1_PIN:
-      /* Change the period from 500ms to 250ms or 250ms to 500ms */
-      delay = (delay == 250) ? 500 : 250;
-      break;
-  }
-}
 
 /**
   * @brief  This function is executed in case of error occurrence.

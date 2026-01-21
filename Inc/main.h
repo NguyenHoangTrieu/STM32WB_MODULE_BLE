@@ -28,8 +28,6 @@ extern "C" {
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32wbxx_hal.h"
-
-#include "stm32wbxx_usb_dongle.h"
 #include "app_conf.h"
 #include "app_entry.h"
 #include "app_common.h"
@@ -66,6 +64,8 @@ void Error_Handler(void);
 #define RCC_OSC32_IN_GPIO_Port GPIOC
 #define RCC_OSC32_OUT_Pin GPIO_PIN_15
 #define RCC_OSC32_OUT_GPIO_Port GPIOC
+#define LED_B_Pin GPIO_PIN_4
+#define LED_B_GPIO_Port GPIOE
 #define USB_DM_Pin GPIO_PIN_11
 #define USB_DM_GPIO_Port GPIOA
 #define USB_DP_Pin GPIO_PIN_12

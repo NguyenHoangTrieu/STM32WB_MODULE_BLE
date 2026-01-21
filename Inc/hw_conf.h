@@ -174,7 +174,7 @@
 /** < The application shall check the selected source clock is enable */
 #define CFG_HW_LPUART1_SOURCE_CLOCK             RCC_LPUART1CLKSOURCE_SYSCLK
 
-#define CFG_HW_LPUART1_BAUDRATE                2000000
+#define CFG_HW_LPUART1_BAUDRATE                115200
 #define CFG_HW_LPUART1_WORDLENGTH              UART_WORDLENGTH_8B
 #define CFG_HW_LPUART1_STOPBITS                UART_STOPBITS_1
 #define CFG_HW_LPUART1_PARITY                  UART_PARITY_NONE
@@ -205,8 +205,8 @@
 #define CFG_HW_LPUART1_DMAMUX_CLK_ENABLE       __HAL_RCC_DMAMUX1_CLK_ENABLE
 #define CFG_HW_LPUART1_DMA_CLK_ENABLE          __HAL_RCC_DMA1_CLK_ENABLE
 #define CFG_HW_LPUART1_TX_DMA_REQ              DMA_REQUEST_LPUART1_TX
-#define CFG_HW_LPUART1_TX_DMA_CHANNEL          DMA1_Channel1
-#define CFG_HW_LPUART1_TX_DMA_IRQn             DMA1_Channel1_IRQn
-#define CFG_HW_LPUART1_DMA_TX_IRQHandler       DMA1_Channel1_IRQHandler
+#define CFG_HW_LPUART1_TX_DMA_CHANNEL          DMA1_Channel2
+#define CFG_HW_LPUART1_TX_DMA_IRQn             DMA1_Channel2_IRQn
+#define CFG_HW_LPUART1_DMA_TX_IRQHandler       DMA1_Channel2_IRQHandler
 
 #endif /*HW_CONF_H */
