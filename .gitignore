@@ -36,5 +36,5 @@ Release/
 Thumbs.db
 .Thumbs.db
 
-
+# Cache
 .cache/
