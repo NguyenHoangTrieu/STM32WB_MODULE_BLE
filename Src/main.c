@@ -76,6 +76,7 @@ static void MX_RF_Init(void);
 int _write(int file, char *ptr, int len)
 {
   CDC_Transmit_FS((uint8_t *)ptr, len);
+  // HAL_UART_Transmit(&hlpuart1, (uint8_t *)ptr, len, 0xFFFF);
   return len;
 }
 /* USER CODE END 0 */
