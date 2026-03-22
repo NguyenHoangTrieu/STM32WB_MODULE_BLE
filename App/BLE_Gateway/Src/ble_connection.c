@@ -12,7 +12,12 @@
 #include "at_command.h"
 #include "ble_gap_aci.h"
 #include "ble_hci_le.h"
+#include "hw_if.h"
+#include "app_conf.h"
 #include <string.h>
+
+/* Procedure code for direct connection establishment (STM32WB GAP) */
+#define GAP_DIRECT_CONN_PROC  (0x40U)
 
 extern void AT_Response_Send(const char *fmt, ...);
 
@@ -25,6 +30,27 @@ typedef struct {
 static ConnectionInfo_t connections[MAX_BLE_CONNECTIONS];
 static uint8_t connection_count = 0;
 
+/* Connection attempt timeout tracking */
+static uint8_t conn_timeout_timer_id = 0xFFU;
+static volatile uint8_t conn_in_progress = 0;
+/* Timeout for connection attempt: 10 seconds
+ * For STM32WB55 standard config: LSE=32768Hz, CFG_RTCCLK_DIV=16
+ * CFG_TS_TICK_VAL = (16*1000000)/32768 = 488.28 us per tick
+ * 10 seconds = 10,000,000 us / 488.28 = 20,480 ticks */
+static const uint32_t conn_timeout_ticks = 20480U;
+
+static void ConnTimeout_Callback(void)
+{
+    if (!conn_in_progress) {
+        return;
+    }
+    conn_in_progress = 0;
+    DEBUG_ERROR("Connection attempt timed out");
+    /* Cancel the pending direct connection establishment procedure */
+    aci_gap_terminate_gap_proc(GAP_DIRECT_CONN_PROC);
+    AT_Response_Send("+CONN_ERROR:TIMEOUT\r\n");
+}
+
 void BLE_Connection_Init(void)
 {
     uint8_t i;
@@ -34,6 +60,14 @@ void BLE_Connection_Init(void)
         connections[i].state = CONN_STATE_IDLE;
     }
     connection_count = 0;
+    conn_in_progress = 0;
+
+    /* Create the connection-timeout timer (single-shot) */
+    HW_TS_Create(CFG_TIM_CONN_TIMEOUT_ID,
+                 &conn_timeout_timer_id,
+                 hw_ts_SingleShot,
+                 ConnTimeout_Callback);
+
     DEBUG_INFO("Connection Manager initialized");
 }
 
@@ -136,7 +170,11 @@ int BLE_Connection_CreateConnection(const uint8_t *mac)
         DEBUG_ERROR("Failed to create connection: 0x%02X", ret);
         return -1;
     }
-    
+
+    /* Start connection-attempt timeout (10 s) */
+    conn_in_progress = 1;
+    HW_TS_Start(conn_timeout_timer_id, conn_timeout_ticks);
+
     AT_Response_Send("+CONNECTING\r\n");
     DEBUG_INFO("Connection initiated");
     return 0;
@@ -145,19 +183,46 @@ int BLE_Connection_CreateConnection(const uint8_t *mac)
 int BLE_Connection_TerminateConnection(uint16_t conn_handle)
 {
     tBleStatus ret;
-    
+    uint8_t i;
+
     DEBUG_INFO("Terminating connection: 0x%04X", conn_handle);
-    
-    /* Use HCI_DISCONNECT command - available in ble_hci_le.h
-     * Reason: 0x13 = Remote User Terminated Connection
-     */
+
     ret = hci_disconnect(conn_handle, 0x13);
-    
+
     if (ret != BLE_STATUS_SUCCESS) {
-        DEBUG_ERROR("Failed to terminate connection: 0x%02X", ret);
+        DEBUG_INFO("hci_disconnect 0x%02X - force-clearing state", ret);
+
+        /* hci_disconnect failed (0x01 = controller busy or connection already gone).
+         * Force-clear device state and send +DISCONNECTED immediately.
+         *
+         * This is now safe because BLE_Connection_OnDisconnected checks is_connected
+         * before sending +DISCONNECTED. If the HCI Disconnect Complete event arrives
+         * later, it will find is_connected==0 and silently ignore (no duplicate). */
+        {
+            int fc_idx = BLE_DeviceManager_FindConnHandle(conn_handle);
+            if (fc_idx >= 0) {
+                BLE_DeviceManager_UpdateConnection(fc_idx, conn_handle, 0);
+            }
+        }
+
+        /* Remove from connection table */
+        for (i = 0; i < MAX_BLE_CONNECTIONS; i++) {
+            if (connections[i].conn_handle == conn_handle) {
+                connections[i].conn_handle = 0xFFFF;
+                connections[i].state       = CONN_STATE_IDLE;
+                if (connection_count > 0) {
+                    connection_count--;
+                }
+                break;
+            }
+        }
+
+        /* Notify AT layer - safe to send here because OnDisconnected is now
+         * guarded by is_connected check and won't send a second +DISCONNECTED */
+        AT_Response_Send("+DISCONNECTED:0x%04X\r\n", conn_handle);
         return -1;
     }
-    
+
     DEBUG_INFO("Disconnect initiated");
     return 0;
 }
@@ -199,8 +264,12 @@ uint8_t BLE_Connection_IsConnected(uint16_t conn_handle)
     return 0;
 }
 
-void BLE_Connection_OnScanReport(const uint8_t *mac, int8_t rssi, 
-                                  const char *name, uint8_t addr_type)
+/* ADV_IND=0x00 and ADV_DIRECT_IND=0x01 are connectable; all others are not */
+#define BLE_EVT_TYPE_CONNECTABLE(t)  ((t) == 0x00U || (t) == 0x01U)
+
+void BLE_Connection_OnScanReport(const uint8_t *mac, int8_t rssi,
+                                  const char *name, uint8_t addr_type,
+                                  uint8_t event_type)
 {
     int idx;
     BLE_Device_t *dev;
@@ -216,11 +285,12 @@ void BLE_Connection_OnScanReport(const uint8_t *mac, int8_t rssi,
         if (dev == NULL) {
             return;
         }
-        /*Update Address Type*/
         BLE_DeviceManager_UpdateAddrType(idx, addr_type);
+        /* Store event type and track whether this device is connectable */
+        dev->event_type = event_type;
+        dev->is_connectable = BLE_EVT_TYPE_CONNECTABLE(event_type) ? 1U : 0U;
         
         if (name != NULL && name[0] != '\0') {
-            /* Update name if available */
             BLE_DeviceManager_UpdateName(idx, name);
         }
         
@@ -240,7 +310,11 @@ void BLE_Connection_OnConnected(const uint8_t *mac, uint16_t conn_handle, uint8_
 {
     int dev_idx;
     uint8_t i;
-    
+
+    /* Stop timeout timer regardless of outcome */
+    conn_in_progress = 0;
+    HW_TS_Stop(conn_timeout_timer_id);
+
     DEBUG_INFO("Conn complete: hdl=0x%04X status=0x%02X", conn_handle, status);
     
     if (status != 0) {
@@ -272,15 +346,24 @@ void BLE_Connection_OnDisconnected(uint16_t conn_handle, uint8_t reason)
 {
     int dev_idx;
     uint8_t i;
-    
+    uint8_t was_connected = 0;
+
     DEBUG_INFO("Disconn: hdl=0x%04X reason=0x%02X", conn_handle, reason);
-    
+
     dev_idx = BLE_DeviceManager_FindConnHandle(conn_handle);
     if (dev_idx >= 0) {
+        BLE_Device_t *dev = BLE_DeviceManager_GetDevice(dev_idx);
+
+        if (dev != NULL && dev->is_connected) {
+            was_connected = 1;
+        } else {
+            DEBUG_INFO("Disconn event for already-cleared hdl 0x%04X - ignored", conn_handle);
+        }
+
         BLE_DeviceManager_UpdateConnection(dev_idx, conn_handle, 0);
     }
-    
-    /* Remove from connections */
+
+    /* Remove from connections table regardless */
     for (i = 0; i < MAX_BLE_CONNECTIONS; i++) {
         if (connections[i].conn_handle == conn_handle) {
             connections[i].conn_handle = 0xFFFF;
@@ -291,6 +374,9 @@ void BLE_Connection_OnDisconnected(uint16_t conn_handle, uint8_t reason)
             break;
         }
     }
-    
-    AT_Response_Send("+DISCONNECTED:0x%04X\r\n", conn_handle);
+
+    /* Notify AT layer only if device was connected when event arrived */
+    if (was_connected) {
+        AT_Response_Send("+DISCONNECTED:0x%04X\r\n", conn_handle);
+    }
 }

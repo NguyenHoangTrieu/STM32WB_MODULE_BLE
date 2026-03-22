@@ -66,11 +66,11 @@ void BLE_EventHandler_RegisterGattProcCompleteCallback(BLE_GATTCProcCompleteCall
     proc_complete_cb = cb;
 }
 
-void BLE_EventHandler_OnScanReport(const uint8_t *mac, int8_t rssi, const char *name, uint8_t addr_type)
+void BLE_EventHandler_OnScanReport(const uint8_t *mac, int8_t rssi, const char *name, uint8_t addr_type, uint8_t event_type)
 {
-    DEBUG_PRINT("Event: Scan Report - RSSI=%d", rssi);
+    DEBUG_PRINT("Event: Scan Report - RSSI=%d, evt_type=%d", rssi, event_type);
     if (scan_cb) {
-        scan_cb(mac, rssi, name, addr_type);
+        scan_cb(mac, rssi, name, addr_type, event_type);
     }
 }
 
